@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd">
+	<http:listener-config name="HTTP_Listener_config" doc:name="HTTP Listener config" doc:id="99c5e1be-8cce-4d70-b724-32538c2cb9fe" >
+		<http:listener-connection host="0.0.0.0" port="8082" />
+	</http:listener-config>
+	<db:config name="Database_Config" doc:name="Database Config" doc:id="6a144548-104b-4b36-a28e-989d9def4198" >
+		<db:mssql-connection host="DHSSQLP12VW\P12VWDHSPROD" port="3466" user="dhsgis" password="MatvjoBj!u37H6@#" databaseName="DHSGISDB2" />
+	</db:config>
+	<flow name="nwspolygonsFlow" doc:id="9e2a43f5-002a-4dd1-939f-fdac0735b7dd" >
+		<http:listener doc:name="Listener" doc:id="0656dd43-2e6b-4802-adc3-7096b849d6bc" config-ref="HTTP_Listener_config" path="/nwspolygons"/>
+		<http:request method="GET" doc:name="Request" doc:id="ee8023ab-798d-4d17-8ea6-9ac312356052" url="https://idpgis.ncep.noaa.gov/arcgis/rest/services/NWS_Forecasts_Guidance_Warnings/watch_warn_adv/MapServer/0/query?where=ObjectID+%3E+0&amp;text=&amp;objectIds=&amp;time=&amp;geometry=&amp;geometryType=esriGeometryEnvelope&amp;inSR=&amp;spatialRel=esriSpatialRelIntersects&amp;distance=&amp;units=esriSRUnit_Foot&amp;relationParam=&amp;outFields=*&amp;returnGeometry=true&amp;returnTrueCurves=false&amp;maxAllowableOffset=&amp;geometryPrecision=&amp;outSR=&amp;havingClause=&amp;returnIdsOnly=false&amp;returnCountOnly=false&amp;orderByFields=&amp;groupByFieldsForStatistics=&amp;outStatistics=&amp;returnZ=false&amp;returnM=false&amp;gdbVersion=&amp;historicMoment=&amp;returnDistinctValues=false&amp;resultOffset=&amp;resultRecordCount=&amp;returnExtentOnly=false&amp;datumTransformation=&amp;parameterValues=&amp;rangeValues=&amp;quantizationParameters=&amp;featureEncoding=esriDefault&amp;f=json"/>
+		<ee:transform doc:name="Transform Message" doc:id="94a8b514-a507-43aa-b039-44b969d9fa6a" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+import * from dw::core::Strings
+output application/java
+---
+payload."features" map (item, index) -> {
+"objectid": item."attributes".objectid,
+"cap_id": substring(item."attributes".cap_id, 0, 50), //Increase the column size in the database
+"vtec": item."attributes".vtec,
+"phenom": item."attributes".phenom,
+"sig": item."attributes".sig,
+"shape": replaceAll("POLYGON (" ++ (item.geometry.rings reduce ((item, acc="") -> "(" ++ (item reduce ((itemInner, accInner="") -> itemInner joinBy " " ++ ", " ++ accInner) ++ "), ") ++ acc)) ++ ")", ", ), ", ")"),
+"wfo": item."attributes".wfo,
+"event": item."attributes".event,
+"issuance": item."attributes".issuance,
+"expiration": item."attributes".expiration,
+"onset": item."attributes".onset,
+"ends": item."attributes".ends,
+"url": item."attributes".url,
+"msg_type": item."attributes".msg_type,
+"prod_type": item."attributes".prod_type,
+"idp_source": item."attributes".idp_source,
+"idp_subset": item."attributes".idp_subset,
+"idp_filedate": (item."attributes".idp_filedate as Number/1000) as DateTime as String {format: "yyyy-MM-dd HH:mm:ss"},
+"idp_ingestdate": (item."attributes".idp_ingestdate as Number/1000) as DateTime as String {format: "yyyy-MM-dd HH:mm:ss"},
+"idp_current_forecast": item."attributes".idp_current_forecast,
+"idp_time_series": item."attributes".idp_time_series,
+"idp_issueddate": item."attributes".idp_issueddate,
+"idp_validtime": item."attributes".idp_validtime,
+"idp_validendtime": item."attributes".idp_validendtime,
+"idp_fcst_hour": item."attributes".idp_fcst_hour,
+"SHAPE.STArea": item."attributes"."st_area(shape)",
+"SHAPE.STLength": item."attributes"."st_length(shape)"
+}
+]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<logger level="INFO" doc:name="Logger" doc:id="fe087fcf-d627-4f70-80d1-81ddfcd04ad8" message="#[output application/json --- payload]"/>
+		<db:bulk-insert doc:name="Bulk insert" doc:id="9777349e-f2d6-45d1-a05e-30a307ebfec0" config-ref="Database_Config">
+			<db:sql ><![CDATA[INSERT INTO DHSGISDB2.dbo.POCMULEPOLYGONS(OBJECTID, cap_id, vtec, phenom, sig, SHAPE, wfo, event, issuance, expiration, onset, ends, msgtype, prodtype, idpsource, idpsubset, idpfiledate, idpingestdate, idpcurrentforecast, idptimeseries, idpissuedate, idpvalidtime, idpvalidendtime, idpfcsthour) 
+VALUES(:objectid,:cap_id,:vtec,:phenom,:sig,:shape,:wfo,:event,:issuance,:expiration,:onset,:ends,:msg_type,:prod_type,:idp_source,:idp_subset,:idp_filedate,:idp_ingestdate,:idp_current_forecast,:idp_time_series,:idp_issueddate,:idp_validtime,:idp_validendtime,:idp_fcst_hour)]]></db:sql>
+		</db:bulk-insert>
+		<ee:transform doc:name="Transform Message" doc:id="e73db828-2ce1-4424-8790-ef2a5850a966" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[output application/json
+---
+{
+	"httpStatus": "200",
+	"httpMessage": "GIS records inserted successfully!!!"
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+	</flow>
+</mule>
